@@ -1,0 +1,15 @@
+{
+  "name": "zookeeper-config",
+  "version": "1.0.0",
+  "description": "config cache using zookeeper",
+  "main": "zookeeper-config.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "zookeeper": "github:dfsxdev/node-zookeeper#3.4.9-cross",
+    "bluebird": "*"
+  }
+}
