@@ -9,7 +9,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "zookeeper": "github:dfsxdev/node-zookeeper#3.4.9-cross",
+    "zookeeper": "github:dfsxdev/node-zookeeper",
     "bluebird": "*"
   }
 }
