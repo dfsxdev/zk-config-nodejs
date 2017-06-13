@@ -1,6 +1,5 @@
-const ZooKeeper = require('zookeeper');
+const ZooKeeper = require('node-zookeeper-client');
 const Promise = require('bluebird');
-//const _ = require('lodash');
 
 global.ConfigSetFlag = {
     CREATE: 1,
@@ -12,25 +11,21 @@ global.ConfigSetFlag = {
 };
 
 let cacheflag = {
-    cacheflag_init: 0,
-    cacheflag_deleted: 1,
-    cacheflag_created: 2,
-    cacheflag_changedd: 2,
-}
+    CACHEFLAG_INIT: 0,
+    CACHEFLAG_DELETED: 1,
+    CACHEFLAG_CREATED: 2,
+    CACHEFLAG_CHANGEDD: 2
+};
 
 class ZKConfig {
     constructor() {
-        let node_env = process.env.NODE_ENV ? process.env.NODE_ENV : 'development';
-        let connect = node_env === 'development' ? '192.168.6.206:2181' : '192.168.6.206:2181';
+        let nodeEnv = process.env.NODE_ENV ? process.env.NODE_ENV : 'development';
+        let connect = nodeEnv === 'development' ? '192.168.6.206:2181' : '192.168.6.206:2181';
         let timeout = 60000; // 单位毫秒
-        let debug_level = ZooKeeper.ZOO_LOG_LEVEL_WARN;
-        let host_order_deterministic = false;
 
         this.defaultInitOpt = {
             connect,
-            timeout,
-            debug_level,
-            host_order_deterministic
+            timeout
         };
 
         this.cachedata = {};
@@ -45,40 +40,73 @@ class ZKConfig {
     }
 
     init(opt) {
-        this.opt = opt;
-        this._initZook();
-        let self = this;
+        this.defaultInitOpt.connect = opt.connect;
+        this.defaultInitOpt.timeout = opt.timeout;
+
         this.cachedata = {};
         this.childcachedata = {};
-        // return new Promise((resolve, reject) => {
-        //     self.zookeeper.connect(function (error) {
-        //         if (error) {
-        //             reject(error);
-        //             return;
-        //         } else {
-        //             console.log('zk session established, id=%s', self.zookeeper.client_id);
-        //             resolve("connected");
-        //             return;
-        //         }
-        //     });
-        // });
 
-        self.zookeeper.connect(function (error) {
-                if (error) {
-                    console.log('connect error, error=%s', error);
-                } else {
-                    console.log('zk session established, id=%s', self.zookeeper.client_id);
-                }
-            });
+        this.bRestart = false;
+        this.cacheSetHistory = {};
+
+        this._initZook();
     }
 
     _initZook() {
-        this.defaultInitOpt.connect = this.opt.connect;
-        this.defaultInitOpt.timeout = this.opt.timeout;
-        this.zookeeper = new ZooKeeper(this.defaultInitOpt);
+        let self = this;
+
+        this.zookeeper = ZooKeeper.createClient(this.defaultInitOpt.connect,
+            {
+                sessionTimeout: this.defaultInitOpt.timeout,
+                spinDelay: 1000,
+                retries: 0
+            });
+
+        this.zookeeper.once('connected', function () {
+            self.log('Connected to the server.');
+
+            if (self.bRestart) {
+                self.bRestart = false;
+                self.createCacheSetHistory();
+            }
+        });
+
+        this.zookeeper.once('disconnected', function () {
+            self.log('disconnected');
+        });
+
+        this.zookeeper.once('expired', function () {
+            self.log('expired');
+
+            self.bRestart = true;
+            self._initZook();
+        });
+
+        this.zookeeper.connect();
     }
 
-    setcache(path, value, flag = cacheflag.cacheflag_changedd) {
+    createCacheSetHistory() {
+        for (var path in this.cacheSetHistory) {
+            if (this.cacheSetHistory.hasOwnProperty(path)) {
+                this.set(path, this.cacheSetHistory[path].data, this.cacheSetHistory[path].flag);
+
+            }
+        }
+    }
+
+    log(str, ...args) {
+        if (process.env.NODE_ENV != 'production') {
+            if (args.length > 0) {
+                console.log(str, args);
+            } else {
+                console.log(str);
+            }
+
+        }
+    }
+
+
+    setcache(path, value, flag = cacheflag.CACHEFLAG_CHANGEDD) {
         if (this.cachedata[path] == null)
             this.cachedata[path] = {};
         this.cachedata[path].flag = flag;
@@ -89,7 +117,19 @@ class ZKConfig {
         return this.cachedata[path];
     }
 
-    setchildcache(path, value, flag = cacheflag.cacheflag_changedd) {
+    setCacheSetHistory(path, value, flag = cacheflag.CACHEFLAG_CHANGEDD) {
+        if (this.cacheSetHistory[path] == null)
+            this.cacheSetHistory[path] = {};
+        this.cacheSetHistory[path].flag = flag;
+        this.cacheSetHistory[path].data = value;
+    }
+
+    getCacheSetHistory(path) {
+        return this.cacheSetHistory[path];
+    }
+
+
+    setchildcache(path, value, flag = cacheflag.CACHEFLAG_CHANGEDD) {
         if (this.childcachedata[path] == null)
             this.childcachedata[path] = {};
         this.childcachedata[path].flag = flag;
@@ -101,25 +141,25 @@ class ZKConfig {
     }
 
     getzookflag(flag) {
-        var zookflag = "";
+        var zookflag = '';
         switch (flag) {
             case ConfigSetFlag.CREATE:
-                zookflag = ZooKeeper.ZOO_PERSISTENT;
+                zookflag = ZooKeeper.CreateMode.PERSISTENT;
                 break;
             case ConfigSetFlag.CREATE_TEMPORARY:
-                zookflag = ZooKeeper.ZOO_EPHEMERAL;
+                zookflag = ZooKeeper.CreateMode.EPHEMERAL;
                 break;
             case ConfigSetFlag.OVERWRITE:
-                zookflag = ZooKeeper.ZOO_PERSISTENT;
+                zookflag = ZooKeeper.CreateMode.PERSISTENT;
                 break;
             case ConfigSetFlag.OVERWRITE_IF_EXISTS:
-                zookflag = ZooKeeper.ZOO_PERSISTENT;
+                zookflag = ZooKeeper.CreateMode.PERSISTENT;
                 break;
             case ConfigSetFlag.SEQUENTIAL:
-                zookflag = ZooKeeper.ZOO_PERSISTENT | ZooKeeper.ZOO_SEQUENCE;
+                zookflag = ZooKeeper.CreateMode.PERSISTENT_SEQUENTIAL;
                 break;
             case ConfigSetFlag.SEQUENTIAL_TEMPORARY:
-                zookflag = ZooKeeper.ZOO_EPHEMERAL | ZooKeeper.ZOO_SEQUENCE;
+                zookflag = ZooKeeper.CreateMode.EPHEMERAL_SEQUENTIAL;
                 break;
             default:
                 break;
@@ -129,16 +169,21 @@ class ZKConfig {
     }
 
     exists(path) {
-        return new Promise((resolve, reject) => {
-            let self = this;
-            self.zookeeper.a_exists(path, null, function (rc, error, stat) {
-                if (rc !== 0) {
-                    console.log("node not exists, result: %d, error: '%s', stat=%j", rc, error, stat);
+        let self = this;
+        return new Promise(function (resolve, reject) {
+            self.zookeeper.exists(path, null, function (error, stat) {
+                if (error) {
+                    self.log('node exists, error: \'%s\'', error);
                     reject(error);
+                }
+
+                if (stat) {
+                    self.log('Node exists.');
+                    resolve(stat);
                     return;
                 } else {
-                    console.log('node exists!');
-                    resolve(stat);
+                    self.log('Node does not exist.');
+                    reject(error);
                     return;
                 }
             });
@@ -146,61 +191,71 @@ class ZKConfig {
     }
 
     get(path) {
-        return new Promise((resolve, reject) => {
-            let self = this;
+        let self = this;
+        return new Promise(function (resolve, reject) {
             let cache = self.getcache(path);
             if (cache != null) {
-                if (cache.flag === cacheflag.cacheflag_deleted) {
-                    self.setcache(path, null, cacheflag.cacheflag_init);
-                } else if (cache.flag === cacheflag.cacheflag_init) {
-                    console.log('get cache node: node deleted');
+                // 因为watcher的是一次性的，所以节点被删除后，要再调用exists设置watcher。
+                // 第一次get，标志为CACHEFLAG_DELETED，调用exists设置watcher。
+                // 第二次get，标志为CACHEFLAG_INIT，就直接返回node not exists
+                if (cache.flag === cacheflag.CACHEFLAG_DELETED) {
+                    self.setcache(path, null, cacheflag.CACHEFLAG_INIT);
+                } else if (cache.flag === cacheflag.CACHEFLAG_INIT) {
+                    self.log('get cache node: node deleted');
                     reject('node not exists');
                     return;
                 } else if (cache.data != null) {
                     let data = cache.data;
-                    console.log('get cache node: ' + data);
+                    self.log('get cache node: ' + data);
                     resolve(data);
                     return;
                 }
             }
 
-            self.zookeeper.aw_exists(path,
-                function (type, state, path) {
-                    console.log("get:aw_exists get watcher is triggered: type=%d, state=%d, path=%s", type, state, path);
-                    if (type == ZooKeeper.ZOO_CREATED_EVENT) {
-                        console.log("node created");
+            self.zookeeper.exists(path,
+                function (event) {
+                    self.log('exists, Got event: %s.', event);
+
+                    // 节点被创建
+                    if (event.getType() == ZooKeeper.Event.NODE_CREATED) {
+                        self.log('node created');
                         self.setcache(path, null);
                     }
                 },
-                function (rc, error, stat) {
-                    if (rc != 0) {
-                        console.log("node not exists, result: %d, error: '%s', stat=%j", rc, error, stat);
-                        if (rc == ZooKeeper.ZNONODE) {
-                            self.setcache(path, null, cacheflag.cacheflag_deleted);
-                            reject('node not exists');
-                        } else {
-                            reject(error);
-                        }
+                function (error, stat) {
+                    if (error) {
+                        self.log('node exists, error: \'%s\'', error);
+
+                        reject(error);
+                        return;
+                    }
+
+                    if (!stat) {
+                        self.log('Node does not exist.');
+
+                        // self.setcache(path, null, cacheflag.CACHEFLAG_DELETED);
+                        reject('node not exists');
+
                         return;
                     } else {
-                        self.zookeeper.aw_get(path,
-                            function (type, state, path) {
-                                console.log("get:: get watcher is triggered: type=%d, state=%d, path=%s", type, state, path);
-                                if (type == ZooKeeper.ZOO_DELETED_EVENT) {
-                                    console.log("node deleted");
-                                    self.setcache(path, null, cacheflag.cacheflag_deleted);
-                                } else if (type == ZooKeeper.ZOO_CHANGED_EVENT || type == ZooKeeper.ZOO_CREATED_EVENT) {
+                        self.zookeeper.getData(path,
+                            function (event) {
+                                self.log('getData, Got event: %s.', event);
+
+                                if (event.getType() == ZooKeeper.Event.NODE_DELETED) {
+                                    self.log('node deleted');
+                                    self.setcache(path, null, cacheflag.CACHEFLAG_DELETED);
+                                } else if (event.getType() == ZooKeeper.Event.NODE_DATA_CHANGED || event == ZooKeeper.Event.NODE_CREATED) {
                                     self.setcache(path, null);
                                 }
                             },
-                            function (rc, error, stat, data) {
-                                if (rc !== 0) {
-                                    console.log('zk node get result: %d, error: "%s", stat=%s, data=%s', rc, error, stat, data);
+                            function (error, data, stat) {
+                                if (error) {
+                                    self.log('zk node get error: "%s", stat=%s, data=%s', error, stat, data);
                                     reject(error);
                                     return;
                                 } else {
-                                    console.log('get zk node: ' + data);
-                                    //console.log('stat: ', stat);
+                                    self.log('Got data: %s', data);
                                     self.setcache(path, data);
                                     resolve(data);
                                     return;
@@ -211,51 +266,52 @@ class ZKConfig {
         });
     }
 
-    overwrite_if_exists(in_path, value, flag, resolve, reject) {
+    overwriteIfExists(inPath, value, flag, resolve, reject) {
         let self = this;
 
         var zookflag = self.getzookflag(flag);
-        self.zookeeper.a_create(in_path, value, zookflag, function (rc, error, path) {
-            if (rc !== 0) {
-                if ((ZooKeeper.ZSYSTEMERROR < rc && rc < ZooKeeper.ZAPIERROR)
-                    || rc == ZooKeeper.ZNOAUTH
-                    || rc == ZooKeeper.ZSESSIONEXPIRED
-                    || rc == ZooKeeper.ZAUTHFAILED
-                    || rc == ZooKeeper.ZCLOSING
-                    || rc == ZooKeeper.ZNONODE) {
-                    console.log('zk node create result: %d, error: "%s", path=%s', rc, error, path);
+        self.zookeeper.create(inPath, new Buffer(value), zookflag, function (error, path) {
+            if (error) {
+                let rc = error.getCode();
+                if ((ZooKeeper.Exception.SYSTEM_ERROR < rc && rc < ZooKeeper.Exception.API_ERROR)
+                    || rc == ZooKeeper.Exception.NO_AUTH
+                    || rc == ZooKeeper.Exception.SESSION_EXPIRED
+                    || rc == ZooKeeper.Exception.AUTH_FAILED
+                    // || rc == ZooKeeper.Exception.ZCLOSING
+                    || rc == ZooKeeper.Exception.NO_NODE) {
+                    self.log('zk node create result: %d, error: "%s", path=%s', rc, error, path);
 
                     reject(error);
                     return;
-                }
-                else {
-                    console.log('create failed, result: %d, error: "%s", path=%s', rc, error, path);
-                    self.zookeeper.a_set(in_path, value, -1, function (rc, error, stat) {
-                        if (rc !== 0) {
-                            if ((ZooKeeper.ZSYSTEMERROR < rc && rc < ZooKeeper.ZAPIERROR)
-                                || rc == ZooKeeper.ZNOAUTH
-                                || rc == ZooKeeper.ZSESSIONEXPIRED
-                                || rc == ZooKeeper.ZAUTHFAILED
-                                || rc == ZooKeeper.ZCLOSING) {
-                                console.log('zk node set, other error, result: %d, error: "%s", stat=%s', rc, error, stat);
+                } else {
+                    self.log('create failed, result: %d, error: "%s", path=%s', rc, error, path);
+                    self.zookeeper.setData(inPath, new Buffer(value), -1, function (error, stat) {
+                        if (error) {
+                            let rc = error.getCode();
+                            if ((ZooKeeper.Exception.SYSTEM_ERROR < rc && rc < ZooKeeper.Exception.API_ERROR)
+                                || rc == ZooKeeper.Exception.NO_AUTH
+                                || rc == ZooKeeper.Exception.SESSION_EXPIRED
+                                || rc == ZooKeeper.Exception.AUTH_FAILED
+                            // || rc == ZooKeeper.ZCLOSING
+                            ) {
+                                self.log('zk node set, other error, result: %d, error: "%s", stat=%s', rc, error, stat);
 
                                 reject(error);
                                 return;
-                            }
-                            else {
-                                console.log('zk node set, continue , result: %d, error: "%s", stat=%s', rc, error, stat);
-                                self.overwrite_if_exists(in_path, value, flag, resolve, reject);
+                            } else {
+                                self.log('zk node set, continue , result: %d, error: "%s", stat=%s', rc, error, stat);
+                                self.overwriteIfExists(inPath, value, flag, resolve, reject);
                             }
                         } else {
-                            console.log('set zk node succ!');
+                            self.log('set zk node succ!');
 
-                            resolve(in_path);
+                            resolve(inPath);
                             return;
                         }
                     });
                 }
             } else {
-                console.log('create zk node succ! path=' + path);
+                self.log('create zk node succ! path=' + path);
                 resolve(path);
                 return;
             }
@@ -263,75 +319,78 @@ class ZKConfig {
     }
 
     set(path, value, flag) {
+        if (flag == ConfigSetFlag.CREATE_TEMPORARY) {
+            this.setCacheSetHistory(path, value, flag);
+        }
+
         let zkData = null;
         let self = this;
-        return new Promise((resolve, reject) => {
-                self.setcache(path, null);
+        return new Promise(function (resolve, reject) {
+            self.setcache(path, null);
 
-                if (flag == ConfigSetFlag.OVERWRITE_IF_EXISTS) {
-                    self.overwrite_if_exists(path, value, flag, resolve, reject);
-                } else {
-                    if (flag == ConfigSetFlag.CREATE || flag == ConfigSetFlag.CREATE_TEMPORARY
-                        || flag == ConfigSetFlag.SEQUENTIAL || flag == ConfigSetFlag.SEQUENTIAL_TEMPORARY) {
-                        var zookflag = self.getzookflag(flag);
-                        self.zookeeper.a_create(path, value, zookflag, function (rc, error, path) {
-                            if (rc !== 0) {
-                                console.log('zk node create result: %d, error: "%s", path=%s', rc, error, path);
+            if (flag == ConfigSetFlag.OVERWRITE_IF_EXISTS) {
+                self.overwriteIfExists(path, value, flag, resolve, reject);
+            } else {
+                if (flag == ConfigSetFlag.CREATE || flag == ConfigSetFlag.CREATE_TEMPORARY
+                    || flag == ConfigSetFlag.SEQUENTIAL || flag == ConfigSetFlag.SEQUENTIAL_TEMPORARY) {
+                    var zookflag = self.getzookflag(flag);
+                    self.zookeeper.create(path, new Buffer(value), zookflag, function (error, path) {
+                        if (error) {
+                            self.log('zk node create error: "%s", path=%s', error, path);
 
-                                reject(error);
-                                return;
-                            } else {
-                                console.log('create zk node succ! path=' + path);
+                            reject(error);
+                            return;
+                        } else {
+                            self.log('create zk node succ! path=' + path);
 
-                                resolve(path);
-                                return;
-                            }
-                        });
-                    } else if (flag == ConfigSetFlag.OVERWRITE) {
-                        self.zookeeper.a_set(path, value, -1, function (rc, error, stat) {
-                            if (rc !== 0) {
-                                console.log('zk node set result: %d, error: "%s", stat=%s', rc, error, stat);
+                            resolve(path);
+                            return;
+                        }
+                    });
+                } else if (flag == ConfigSetFlag.OVERWRITE) {
+                    self.zookeeper.setData(path, new Buffer(value), -1, function (error, stat) {
+                        if (error) {
+                            self.log('zk node set error: "%s", stat=%s', error, stat);
 
-                                reject(error);
-                                return;
-                            } else {
-                                console.log('set zk node succ!');
+                            reject(error);
+                            return;
+                        } else {
+                            self.log('set zk node succ!');
 
-                                resolve(path);
-                                return;
-                            }
-                        });
-                    }
+                            resolve(path);
+                            return;
+                        }
+                    });
                 }
             }
-        );
+        });
     }
 
     getChildPaths(path) {
-        return new Promise((resolve, reject) => {
-            let self = this;
-
+        let self = this;
+        return new Promise(function (resolve, reject) {
             let cache = self.getchildcache(path);
             if (cache != null) {
-                if (cache.flag === cacheflag.cacheflag_deleted) {
-                    self.setchildcache(path, null, cacheflag.cacheflag_init);
-                } else if (cache.flag === cacheflag.cacheflag_init) {
-                    console.log('get cache node: node deleted');
+                if (cache.flag === cacheflag.CACHEFLAG_DELETED) {
+                    self.setchildcache(path, null, cacheflag.CACHEFLAG_INIT);
+                } else if (cache.flag === cacheflag.CACHEFLAG_INIT) {
+                    self.log('get cache node: node deleted');
                     resolve(null);
                     return;
                 } else if (cache.data != null) {
                     let data = cache.data;
-                    console.log('get cache node: ' + data);
+                    self.log('get cache node: ' + data);
                     resolve(data);
                     return;
                 }
             }
 
-            self.zookeeper.a_exists(path, null, function (rc, error, stat) {
-                if (rc != 0) {
-                    console.log("node not exists, result: %d, error: '%s', stat=%j", rc, error, stat);
-                    if (rc == ZooKeeper.ZNONODE) {
-                        self.setchildcache(path, null, cacheflag.cacheflag_deleted);
+            self.zookeeper.exists(path, null, function (error, stat) {
+                if (error) {
+                    var rc = error.getCode();
+                    self.log('node not exists, result: %d, error: \'%s\', stat=%j', rc, error, stat);
+                    if (rc == ZooKeeper.Exception.NO_NODE) {
+                        // self.setchildcache(path, null, cacheflag.CACHEFLAG_DELETED);
                         reject('node not exists');
                     } else {
                         reject(error);
@@ -339,23 +398,25 @@ class ZKConfig {
                     return;
 
                 } else {
-                    self.zookeeper.aw_get_children(path,
-                        function (type, state, path) {
-                            console.log("getChildPaths :: get watcher is triggered: type=%d, state=%d, path=%s", type, state, path);
-                            if (type == ZooKeeper.ZOO_DELETED_EVENT) {
-                                self.setchildcache(path, null, cacheflag.cacheflag_deleted);
-                            } else if (type == ZooKeeper.ZOO_CHANGED_EVENT || type == ZooKeeper.ZOO_CREATED_EVENT || type == ZooKeeper.ZOO_CHILD_EVENT) {
+                    self.zookeeper.getChildren(path,
+                        function (event) {
+                            self.log('getChildren, Got event: %s.', event);
+                            if (event.getType() == ZooKeeper.Event.NODE_DELETED) {
+                                self.setchildcache(path, null, cacheflag.CACHEFLAG_DELETED);
+                            } else if (event.getType() === ZooKeeper.Event.NODE_DATA_CHANGED
+                                || event === ZooKeeper.Event.NODE_CREATED
+                                || event === ZooKeeper.Event.NODE_CHILDREN_CHANGED) {
                                 self.setchildcache(path, null);
                             }
                         },
-                        function (rc, error, children) {
-                            if (rc !== 0) {
-                                console.log('zk children get result: %d, error: "%s", children =%s,', rc, error, stat, children);
+                        function (error, children, stat) {
+                            if (error) {
+                                self.log('zk children get error: "%s", children =%s,', error, stat, children);
                                 self.setchildcache(path, null);
                                 reject(error);
                                 return;
                             } else {
-                                console.log('get zk children: ' + children);
+                                self.log('get zk children: ' + children);
                                 self.setchildcache(path, children);
                                 resolve(children);
                                 return;
@@ -367,21 +428,21 @@ class ZKConfig {
     }
 
     delete(path) {
-        return new Promise((resolve, reject) => {
-            let self = this;
-
-            self.zookeeper.a_delete_(path, -1, function (rc, error) {
-                    if (rc !== 0) {
-                        console.log('zk delete result: %d, error: "%s"', rc, error);
-                        self.setchildcache(path, null);
-                        reject(error);
-                        return;
-                    } else {
-                        console.log('zk delete suc');
-                        resolve("");
-                        return;
-                    }
-                });
+        let self = this;
+        return new Promise(function (resolve, reject) {
+            self.zookeeper.remove(path, -1, function (error) {
+                if (error) {
+                    let rc = error.getCode();
+                    self.log('zk delete result: %d, error: "%s"', rc, error);
+                    self.setchildcache(path, null);
+                    reject(error);
+                    return;
+                } else {
+                    self.log('zk delete suc');
+                    resolve('');
+                    return;
+                }
+            });
         });
     }
 }

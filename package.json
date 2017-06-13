@@ -9,7 +9,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "zookeeper": "github:dfsxdev/node-zookeeper",
-    "bluebird": "*"
+    "bluebird": "^3.5.0",
+    "node-zookeeper-client": "^0.2.2"
   }
 }
